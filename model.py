@@ -13,6 +13,8 @@ from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from imblearn.over_sampling import SMOTE
 import warnings
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 warnings.filterwarnings('ignore')
 
 class BurnoutDatasetMerger:
@@ -225,6 +227,226 @@ class BurnoutDatasetMerger:
         
         return self.combined_data
 
+    def handle_missing_values(self):
+        """
+        IMPROVED: Fill missing values instead of dropping columns
+        Creates missing indicators and uses smart filling strategies
+        """
+        print("\n" + "="*70)
+        print("STEP 1: HANDLING MISSING VALUES (IMPROVED)")
+        print("="*70)
+        
+        print("\n📊 Missing Values Before Cleaning:")
+        missing_summary = self.combined_data.isnull().sum()
+        missing_pct = (missing_summary / len(self.combined_data)) * 100
+        
+        missing_df = pd.DataFrame({
+            'Column': missing_summary.index,
+            'Missing_Count': missing_summary.values,
+            'Missing_Percentage': missing_pct.values
+        })
+        missing_df = missing_df[missing_df['Missing_Count'] > 0].sort_values(
+            'Missing_Percentage', ascending=False
+        )
+        
+        if len(missing_df) > 0:
+            print(missing_df.to_string(index=False))
+        
+        # ✨ NEW STRATEGY: DON'T DROP - FILL SMARTLY!
+        print("\n💡 Strategy: Filling ALL columns (not dropping any)")
+        
+        # For numeric columns with high missing rates
+        numeric_cols = self.combined_data.select_dtypes(include=[np.number]).columns
+        numeric_cols = numeric_cols.drop('burnout_target', errors='ignore')
+        
+        for col in numeric_cols:
+            if self.combined_data[col].isnull().any():
+                missing_pct = (self.combined_data[col].isnull().sum() / len(self.combined_data)) * 100
+                
+                if missing_pct > 50:
+                    # High missing rate: Fill with median AND create missing indicator
+                    print(f"\n  📍 {col} ({missing_pct:.1f}% missing):")
+                    
+                    # Create binary indicator for "was missing"
+                    indicator_col = f'{col}_was_missing'
+                    self.combined_data[indicator_col] = self.combined_data[col].isnull().astype(int)
+                    print(f"     ✓ Created indicator: {indicator_col}")
+                    
+                    # Fill with median grouped by burnout status (smarter!)
+                    if 'burnout_target' in self.combined_data.columns:
+                        self.combined_data[col] = self.combined_data.groupby('burnout_target')[col].transform(
+                            lambda x: x.fillna(x.median())
+                        )
+                        print(f"     ✓ Filled with group-specific median")
+                    else:
+                        median_val = self.combined_data[col].median()
+                        self.combined_data[col].fillna(median_val, inplace=True)
+                        print(f"     ✓ Filled with overall median: {median_val:.2f}")
+                else:
+                    # Low missing rate: Simple median fill
+                    median_val = self.combined_data[col].median()
+                    missing_count = self.combined_data[col].isnull().sum()
+                    self.combined_data[col].fillna(median_val, inplace=True)
+                    print(f"  ✓ {col}: filled {missing_count} values with {median_val:.2f}")
+        
+        # Categorical columns
+        categorical_cols = self.combined_data.select_dtypes(include=['object']).columns
+        for col in categorical_cols:
+            if self.combined_data[col].isnull().any():
+                mode_val = self.combined_data[col].mode()[0] if len(self.combined_data[col].mode()) > 0 else 'Unknown'
+                missing_count = self.combined_data[col].isnull().sum()
+                self.combined_data[col].fillna(mode_val, inplace=True)
+                print(f"  ✓ {col}: filled {missing_count} values with '{mode_val}'")
+        
+        # Target variable
+        print("\n🎯 Handling target variable...")
+        if 'burnout_target' in self.combined_data.columns:
+            missing_target = self.combined_data['burnout_target'].isnull().sum()
+            if missing_target > 0:
+                print(f"  ⚠️  Removing {missing_target} rows with missing target")
+                self.combined_data.dropna(subset=['burnout_target'], inplace=True)
+            else:
+                print("  ✓ No missing target values")
+        
+        # Final check
+        print("\n✅ Missing Values After Cleaning:")
+        final_missing = self.combined_data.isnull().sum().sum()
+        print(f"  Total missing values: {final_missing}")
+        
+        if final_missing == 0:
+            print("  ✓ All missing values handled!")
+        
+        print(f"\n📊 Final dataset shape: {self.combined_data.shape}")
+        print(f"📊 Features gained from missing indicators: {len([c for c in self.combined_data.columns if '_was_missing' in c])}")
+        print("="*70)
+        
+        return self.combined_data
+
+    def analyze_correlations(self, save_plot=True):
+        """
+        STEP 2: Correlation analysis and visualization
+        Call this AFTER handling missing values
+        """
+        print("\n" + "="*70)
+        print("STEP 2: CORRELATION ANALYSIS")
+        print("="*70)
+        
+        # Select only numeric columns
+        numeric_data = self.combined_data.select_dtypes(include=[np.number])
+        
+        if numeric_data.shape[1] < 2:
+            print("⚠️  Not enough numeric columns for correlation analysis")
+            return None
+        
+        print(f"\n📊 Analyzing {numeric_data.shape[1]} numeric features...")
+        
+        # Calculate correlation matrix
+        correlation_matrix = numeric_data.corr()
+        
+        # Find correlations with target variable
+        if 'burnout_target' in correlation_matrix.columns:
+            print("\n🎯 TOP CORRELATIONS WITH BURNOUT:")
+            target_corr = correlation_matrix['burnout_target'].sort_values(ascending=False)
+            target_corr = target_corr[target_corr.index != 'burnout_target']
+            
+            print("\nPositive correlations (increase burnout risk):")
+            positive = target_corr[target_corr > 0].head(10)
+            for feat, corr in positive.items():
+                print(f"  {feat:30s}: {corr:+.4f}")
+            
+            print("\nNegative correlations (decrease burnout risk):")
+            negative = target_corr[target_corr < 0].head(10)
+            for feat, corr in negative.items():
+                print(f"  {feat:30s}: {corr:+.4f}")
+        
+        # Find highly correlated feature pairs (multicollinearity)
+        print("\n⚠️  HIGHLY CORRELATED FEATURES (potential multicollinearity):")
+        high_corr_pairs = []
+        
+        for i in range(len(correlation_matrix.columns)):
+            for j in range(i+1, len(correlation_matrix.columns)):
+                if abs(correlation_matrix.iloc[i, j]) > 0.8:
+                    high_corr_pairs.append({
+                        'Feature 1': correlation_matrix.columns[i],
+                        'Feature 2': correlation_matrix.columns[j],
+                        'Correlation': correlation_matrix.iloc[i, j]
+                    })
+        
+        if high_corr_pairs:
+            for pair in high_corr_pairs:
+                print(f"  {pair['Feature 1']} <-> {pair['Feature 2']}: {pair['Correlation']:.4f}")
+            print(f"\n  💡 Consider removing one feature from each pair")
+        else:
+            print("  ✓ No highly correlated feature pairs found")
+        
+        # Create correlation heatmap
+        print("\n📈 Creating correlation heatmap...")
+        
+        # Full correlation matrix
+        plt.figure(figsize=(16, 14))
+        
+        # Mask for upper triangle (optional - makes it cleaner)
+        mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+        
+        sns.heatmap(
+            correlation_matrix,
+            mask=mask,
+            annot=False,  # Set to True if you want numbers on the heatmap
+            cmap='RdBu_r',  # Red for positive, Blue for negative
+            center=0,
+            square=True,
+            linewidths=0.5,
+            cbar_kws={"shrink": 0.8},
+            vmin=-1, vmax=1
+        )
+        
+        plt.title('Feature Correlation Matrix', fontsize=16, fontweight='bold', pad=20)
+        plt.tight_layout()
+        
+        if save_plot:
+            plt.savefig('correlation_matrix_full.png', dpi=300, bbox_inches='tight')
+            print("  ✓ Saved: correlation_matrix_full.png")
+        
+        plt.show()
+        
+        # Create focused heatmap - only top features correlated with target
+        if 'burnout_target' in correlation_matrix.columns:
+            print("\n📈 Creating focused correlation heatmap (top features)...")
+            
+            # Get top 15 features most correlated with target
+            target_corr = correlation_matrix['burnout_target'].abs().sort_values(ascending=False)
+            top_features = target_corr.head(16).index.tolist()  # 15 + target itself
+            
+            # Create subset correlation matrix
+            focused_corr = correlation_matrix.loc[top_features, top_features]
+            
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(
+                focused_corr,
+                annot=True,  # Show correlation values
+                fmt='.2f',
+                cmap='RdBu_r',
+                center=0,
+                square=True,
+                linewidths=1,
+                cbar_kws={"shrink": 0.8},
+                vmin=-1, vmax=1
+            )
+            
+            plt.title('Top Features - Correlation with Burnout Target', 
+                      fontsize=14, fontweight='bold', pad=20)
+            plt.tight_layout()
+            
+            if save_plot:
+                plt.savefig('correlation_matrix_focused.png', dpi=300, bbox_inches='tight')
+                print("  ✓ Saved: correlation_matrix_focused.png")
+            
+            plt.show()
+        
+        print("\n" + "="*70)
+        
+        return correlation_matrix
+
 
 class BurnoutPredictor:
     """Unified burnout prediction model with prediction capabilities"""
@@ -268,6 +490,10 @@ class BurnoutPredictor:
         print(f"    No Burnout (0): {sum(y_train_balanced == 0)}")
         print(f"    Burnout (1): {sum(y_train_balanced == 1)}")
         
+        # Calculate class weights for better F1
+        scale_pos_weight = len(y_train_balanced[y_train_balanced == 0]) / len(y_train_balanced[y_train_balanced == 1])
+        print(f"  Scale positive weight: {scale_pos_weight:.2f}")
+        
         # Train XGBoost
         print("\nTraining XGBoost classifier...")
         self.model = XGBClassifier(
@@ -279,6 +505,7 @@ class BurnoutPredictor:
             colsample_bytree=0.8,
             reg_alpha=0.3,
             reg_lambda=1.0,
+            scale_pos_weight=scale_pos_weight,  # Add class weights
             random_state=42,
             eval_metric='logloss'
         )
@@ -324,6 +551,12 @@ class BurnoutPredictor:
         
         probabilities = self.model.predict_proba(X)[:, 1]  # Probability of class 1 (burnout)
         return probabilities
+    
+    def predict_with_threshold(self, X, threshold=0.4):
+        """Predict with custom threshold to improve F1"""
+        probabilities = self.predict_proba(X)
+        predictions = (probabilities >= threshold).astype(int)
+        return predictions
     
     def predict_single(self, features_dict):
         """
@@ -501,16 +734,16 @@ def test_single_prediction(model):
 
 def main():
     """
-    MAIN FUNCTION - THIS RUNS EVERYTHING
+    MAIN FUNCTION - UPDATED WITH CORRECT ORDER
     """
-    print("="*60)
-    print("COMBINED BURNOUT PREDICTION MODEL")
-    print("Training, Prediction, and Accuracy Checking")
-    print("="*60)
+    print("="*70)
+    print("BURNOUT PREDICTION MODEL - COMPLETE PIPELINE")
+    print("="*70)
     
     # ========================
-    # STEP 1: LOAD DATASETS
+    # STEP 0: LOAD DATASETS
     # ========================
+    print("\n🔵 STEP 0: LOADING DATASETS")
     file_paths = {
         'employee_burnout': './dataset/train.csv',
         'hackerearth_burnout': './dataset/train.csv',  # duplicate for now
@@ -528,21 +761,36 @@ def main():
     
     if len(datasets) == 0:
         print("\n❌ Error: No datasets loaded. Please check file paths.")
-        print("Make sure your CSV files are in the same directory as this script.")
         return None, None
     
     # ========================
-    # STEP 2: MERGE & PREPROCESS
+    # MERGE DATASETS
     # ========================
+    print("\n🔵 MERGING DATASETS")
     combined_data = merger.merge_datasets(datasets)
+    
+    # ========================
+    # 🎯 STEP 1: HANDLE MISSING VALUES (YOUR FIRST STEP!)
+    # ========================
+    print("\n🔵 STEP 1: CLEANING DATA")
+    combined_data = merger.handle_missing_values()
+    
+    # ========================
+    # 🎯 STEP 2: CORRELATION ANALYSIS (YOUR SECOND STEP!)
+    # ========================
+    print("\n🔵 STEP 2: ANALYZING CORRELATIONS")
+    correlation_matrix = merger.analyze_correlations(save_plot=True)
+    
+    # ========================
+    # STEP 3: FEATURE ENGINEERING
+    # ========================
+    print("\n🔵 STEP 3: FEATURE ENGINEERING")
     combined_data = merger.preprocess_combined_data()
     
     # ========================
-    # STEP 3: PREPARE DATA
+    # STEP 4: PREPARE DATA
     # ========================
-    print("\n" + "="*60)
-    print("PREPARING DATA")
-    print("="*60)
+    print("\n🔵 STEP 4: PREPARING DATA FOR TRAINING")
     
     combined_data = combined_data.dropna(subset=['burnout_target'])
     
@@ -554,81 +802,73 @@ def main():
     print(f"✓ Burnout cases: {sum(y == 1)} ({sum(y == 1)/len(y)*100:.1f}%)")
     print(f"✓ No burnout cases: {sum(y == 0)} ({sum(y == 0)/len(y)*100:.1f}%)")
     
-    # Split into train and test sets
+    # Split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
     )
     
-    # Scale features
+    # ========================
+    # STEP 5: NORMALIZATION (SCALING)
+    # ========================
+    print("\n🔵 STEP 5: NORMALIZING FEATURES")
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    print(f"\n✓ Training set: {X_train_scaled.shape[0]} samples")
+    print(f"✓ Features scaled using StandardScaler")
+    print(f"✓ Training set: {X_train_scaled.shape[0]} samples")
     print(f"✓ Test set: {X_test_scaled.shape[0]} samples")
     
     # ========================
-    # STEP 4: TRAIN THE MODEL
+    # STEP 6: TRAIN MODEL
     # ========================
+    print("\n🔵 STEP 6: TRAINING MODEL")
     predictor = BurnoutPredictor()
-    predictor.feature_names = X.columns.tolist()  # Set feature names before training
+    predictor.feature_names = X.columns.tolist()
     predictor.train(X_train_scaled, y_train)
     
     # ========================
-    # STEP 5: CHECK ACCURACY
+    # STEP 7: EVALUATE
     # ========================
+    print("\n🔵 STEP 7: EVALUATING MODEL")
     results = predictor.check_accuracy(X_test_scaled, y_test)
     
     # ========================
-    # STEP 6: TEST PREDICTIONS
+    # STEP 8: TEST PREDICTIONS
     # ========================
+    print("\n🔵 STEP 8: TESTING PREDICTIONS")
     test_single_prediction(predictor)
     
     # ========================
-    # STEP 7: SAVE MODEL
+    # STEP 9: SAVE MODEL
     # ========================
-    print("\n" + "="*60)
-    print("SAVING MODEL")
-    print("="*60)
+    print("\n🔵 STEP 9: SAVING MODEL")
     predictor.save_model('burnout_combined_model.pkl')
     
     # ========================
     # FINAL SUMMARY
     # ========================
-    print("\n" + "="*60)
-    print("TRAINING COMPLETE - SUMMARY")
-    print("="*60)
-    print(f"\n✅ Model Accuracy: {results['accuracy']*100:.2f}%")
-    print(f"✅ ROC-AUC Score: {results['roc_auc']:.4f}")
-    print(f"✅ F1-Score: {results['f1_score']:.4f}")
+    print("\n" + "="*70)
+    print("✅ PIPELINE COMPLETE - SUMMARY")
+    print("="*70)
+    print(f"\n📊 Model Performance:")
+    print(f"  Accuracy:  {results['accuracy']*100:.2f}%")
+    print(f"  F1-Score:  {results['f1_score']:.4f}")
+    print(f"  ROC-AUC:   {results['roc_auc']:.4f}")
     
-    if results['accuracy'] >= 0.90:
-        print("\n🎉 EXCELLENT! Model exceeds 90% accuracy target!")
-    elif results['accuracy'] >= 0.85:
-        print("\n👍 GOOD! Model performs well (85%+ accuracy)")
-    elif results['accuracy'] >= 0.80:
-        print("\n✓ ACCEPTABLE! Model shows decent performance")
-    else:
-        print("\n⚠️ Model needs improvement. Try collecting more data.")
+    print(f"\n📁 Files Created:")
+    print(f"  ✓ correlation_matrix_full.png")
+    print(f"  ✓ correlation_matrix_focused.png")
+    print(f"  ✓ burnout_combined_model.pkl")
     
-    print("\n" + "="*60)
-    print("HOW TO USE THE MODEL:")
-    print("="*60)
-    print("\n1️⃣  Train: predictor.train(X_train, y_train)")
-    print("2️⃣  Predict: predictions = predictor.predict(X_test)")
-    print("3️⃣  Check Accuracy: results = predictor.check_accuracy(X_test, y_test)")
-    print("4️⃣  Single Prediction: pred, prob = predictor.predict_single(features)")
-    print("5️⃣  Save: predictor.save_model('model.pkl')")
-    print("6️⃣  Load: predictor.load_model('model.pkl')")
+    print("\n" + "="*70)
     
-    print("\n" + "="*60)
-    
-    return predictor, results
+    return predictor, results, correlation_matrix
 
 
 if __name__ == "__main__":
     # Run the complete pipeline
-    model, results = main()
+    model, results, corr_matrix = main()
     
     # Now you can use the model:
     # predictions = model.predict(new_data)
