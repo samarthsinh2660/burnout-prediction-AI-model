@@ -10,6 +10,7 @@ A comprehensive machine learning model for predicting burnout risk using multipl
 - **Class Balancing**: SMOTE + class weights for improved F1 scores
 - **Interactive Predictions**: Real-time burnout risk assessment
 - **Visualization**: Correlation heatmaps and feature analysis
+- **Modular Architecture**: Professional code structure for maintainability
 
 ### Technical Features
 - **Algorithm**: XGBoost with class weighting
@@ -56,17 +57,22 @@ pip install -r requirements.txt
 ## 🚀 Usage
 
 ### Train the Model
+
+**New Modular Pipeline (Recommended):**
+```bash
+python run_pipeline.py
+```
+
+**Legacy Monolithic Script:**
 ```bash
 python model.py
 ```
-This will:
-1. Load and merge datasets
-2. Handle missing values
-3. Analyze correlations (saves heatmaps)
-4. Engineer features
-5. Train XGBoost model
-6. Evaluate performance
-7. Save trained model
+
+Both methods produce identical results. The modular version offers:
+- Better code organization
+- Easier maintenance
+- Reusable components
+- Professional structure
 
 ### Interactive Predictions
 ```bash
@@ -88,32 +94,64 @@ Choose option 1 for personalized burnout assessment or option 2 for sample predi
 
 ```
 burnout-prediction/
-├── model.py              # Main training script
-├── interact.py           # Interactive prediction interface
-├── requirements.txt      # Python dependencies
-├── dataset/              # Training data files
+├── config/                       # Configuration
+│   ├── __init__.py
+│   └── config.py                 # Centralized settings
+├── src/                          # Source code
+│   ├── __init__.py
+│   ├── data_processor.py         # Data loading & preprocessing
+│   ├── feature_analyzer.py       # Correlation analysis
+│   ├── model_trainer.py          # Model training & prediction
+│   └── main.py                   # Pipeline orchestration
+├── utils/                        # Utilities
+│   ├── __init__.py
+│   └── logger.py                 # Structured logging
+├── dataset/                      # Training data files
 │   ├── train.csv
 │   ├── mental_health_*.csv
 │   └── ...
-└── burnout_combined_model.pkl  # Trained model (generated)
+├── models/                       # Saved models
+├── run_pipeline.py               # Main execution script
+├── model.py                      # Legacy script (still functional)
+├── interact.py                   # Interactive interface
+├── requirements.txt              # Python dependencies
+└── README.md                     # This file
 ```
 
 ## 🎯 Pipeline Overview
 
+The modular pipeline follows these steps:
+
 1. **Data Loading** - Load multiple CSV datasets
-2. **Data Cleaning** - Handle missing values systematically
-3. **Correlation Analysis** - Identify feature relationships
-4. **Feature Engineering** - Create interaction features
+2. **Data Cleaning** - Handle missing values systematically with smart indicators
+3. **Correlation Analysis** - Identify feature relationships and multicollinearity
+4. **Feature Engineering** - Create interaction features (stress-sleep ratio, digital overload, etc.)
 5. **Preprocessing** - Scaling and encoding
-6. **Model Training** - XGBoost with class balancing
-7. **Evaluation** - Comprehensive metrics
+6. **Model Training** - XGBoost with SMOTE class balancing
+7. **Evaluation** - Comprehensive metrics and confusion matrix
 8. **Deployment** - Save model for predictions
 
 ## 🔧 Advanced Usage
 
+### Using Individual Modules
+```python
+from src.data_processor import DataProcessor
+from src.model_trainer import BurnoutPredictor
+
+# Load and process data
+processor = DataProcessor()
+datasets = processor.load_datasets(file_paths)
+data = processor.merge_datasets(datasets)
+
+# Train model
+model = BurnoutPredictor()
+model.train(X_train, y_train)
+```
+
 ### Custom Threshold Prediction
 ```python
-from model import BurnoutPredictor
+from src.model_trainer import BurnoutPredictor
+
 model = BurnoutPredictor()
 model.load_model('burnout_combined_model.pkl')
 
@@ -127,12 +165,45 @@ predictions = model.predict(X_new)
 probabilities = model.predict_proba(X_new)
 ```
 
+### Modify Configuration
+Edit `config/config.py` to change:
+- Model hyperparameters
+- Dataset paths
+- Processing parameters
+- Feature mappings
+
+```python
+# Example: Change model parameters
+MODEL_PARAMS = {
+    'learning_rate': 0.05,  # Adjust this
+    'max_depth': 7,         # Or this
+    'n_estimators': 300,    # Or this
+}
+```
+
 ## 📊 Output Files
 
-After training, the following files are created:
-- `burnout_combined_model.pkl` - Trained model
-- `correlation_matrix_full.png` - Full feature correlation heatmap
-- `correlation_matrix_focused.png` - Top features correlation
+After training, the following files are created in the `models/` folder:
+- `models/burnout_combined_model.pkl` - Trained model
+- `models/correlation_matrix_full.png` - Full feature correlation heatmap
+- `models/correlation_matrix_focused.png` - Top features correlation
+
+## 🎉 Key Improvements
+
+### Modular Architecture Benefits:
+- **Separation of Concerns**: Each module has a single responsibility
+- **Reusability**: Import and use components independently
+- **Maintainability**: Easy to locate and fix issues
+- **Scalability**: Add features without breaking existing code
+- **Testability**: Test modules in isolation
+- **Configuration**: All settings centralized in `config/config.py`
+
+### Technical Improvements:
+- Smart missing value handling with indicators
+- Group-specific median imputation
+- Class weight optimization for F1-score
+- Comprehensive correlation analysis
+- Future-proof pandas operations (no warnings)
 
 ## 🤝 Contributing
 

@@ -163,7 +163,3 @@ Thumbs.db
 logs/
 *.log
 
-# Project specific
-burnout_combined_model.pkl
-correlation_matrix_full.png
-correlation_matrix_focused.png
