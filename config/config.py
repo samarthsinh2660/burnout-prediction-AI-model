@@ -37,7 +37,8 @@ MODEL_PARAMS = {
 
 # Data Processing Parameters
 PROCESSING_PARAMS = {
-    'test_size': 0.2,
+    'test_size': 0.15,          # 15% for test
+    'validation_size': 0.15,    # 15% for validation (from remaining data)
     'random_state': 42,
     'missing_threshold': 50,  # Percentage for creating missing indicators
     'correlation_threshold': 0.8  # For multicollinearity detection

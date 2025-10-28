@@ -14,5 +14,5 @@ from src.main import main
 
 if __name__ == "__main__":
     print("Starting Burnout Prediction Pipeline...\n")
-    model, results, correlation_matrix = main()
+    output = main()
     print("\nPipeline execution completed successfully!")

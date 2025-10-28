@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data_processor import DataProcessor
 from src.feature_analyzer import FeatureAnalyzer
-from src.model_trainer import BurnoutPredictor
+from src.model_trainer import BurnoutPredictor, HybridEnsemble
 from config.config import DATASET_PATHS, PROCESSING_PARAMS, OUTPUT_PATHS
 
 
@@ -122,77 +122,189 @@ def main():
     X = combined_data.drop('burnout_target', axis=1)
     y = combined_data['burnout_target']
     
-    print(f"\n✓ Total samples: {len(X)}")
-    print(f"✓ Number of features: {X.shape[1]}")
-    print(f"✓ Burnout cases: {sum(y == 1)} ({sum(y == 1)/len(y)*100:.1f}%)")
-    print(f"✓ No burnout cases: {sum(y == 0)} ({sum(y == 0)/len(y)*100:.1f}%)")
+    print(f"\nTotal samples: {len(X)}")
+    print(f"Number of features: {X.shape[1]}")
+    print(f"Burnout cases: {sum(y == 1)} ({sum(y == 1)/len(y)*100:.1f}%)")
+    print(f"No burnout cases: {sum(y == 0)} ({sum(y == 0)/len(y)*100:.1f}%)")
     
-    # Split
-    X_train, X_test, y_train, y_test = train_test_split(
+    # Split into train, validation, and test sets
+    print(f"\nSplitting data into Train/Validation/Test...")
+    
+    # First split: separate test set
+    X_temp, X_test, y_temp, y_test = train_test_split(
         X, y, 
         test_size=PROCESSING_PARAMS['test_size'], 
         stratify=y, 
         random_state=PROCESSING_PARAMS['random_state']
     )
     
-    # ========================
-    # STEP 5: NORMALIZATION (SCALING)
-    # ========================
-    print("\nSTEP 5: NORMALIZING FEATURES")
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    print(f"Features scaled using StandardScaler")
-    print(f"Training set: {X_train_scaled.shape[0]} samples")
-    print(f"Test set: {X_test_scaled.shape[0]} samples")
+    # Second split: separate validation from training
+    val_size_adjusted = PROCESSING_PARAMS['validation_size'] / (1 - PROCESSING_PARAMS['test_size'])
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp,
+        test_size=val_size_adjusted,
+        stratify=y_temp,
+        random_state=PROCESSING_PARAMS['random_state']
+    )
     
     # ========================
-    # STEP 6: TRAIN MODEL
+    # STEP 5: DATA PREPARATION (NO SCALING FOR TREE MODELS)
     # ========================
-    print("\nSTEP 6: TRAINING MODEL")
+    print("\nSTEP 5: PREPARING DATA FOR TREE-BASED MODELS")
+    print("Note: Tree-based models (XGBoost, LightGBM, CatBoost) don't need feature scaling")
+    print("Using raw features to preserve natural importance signals and increase model diversity")
+    
+    # Use unscaled data for better ensemble diversity
+    X_train_processed = X_train
+    X_val_processed = X_val
+    X_test_processed = X_test
+    
+    print(f"\nTraining set: {X_train_processed.shape[0]} samples ({X_train_processed.shape[0]/len(X)*100:.1f}%)")
+    print(f"Validation set: {X_val_processed.shape[0]} samples ({X_val_processed.shape[0]/len(X)*100:.1f}%)")
+    print(f"Test set: {X_test_processed.shape[0]} samples ({X_test_processed.shape[0]/len(X)*100:.1f}%)")
+    
+    # ========================
+    # STEP 6: TRAIN SINGLE MODEL (XGBoost)
+    # ========================
+    print("\nSTEP 6: TRAINING SINGLE MODEL (XGBoost) WITH VALIDATION")
     predictor = BurnoutPredictor()
     predictor.feature_names = X.columns.tolist()
-    predictor.train(X_train_scaled, y_train)
+    predictor.train(X_train_processed, y_train, X_val_processed, y_val, use_custom_loss=True)
+    
+    # Plot training history
+    predictor.plot_training_history()
     
     # ========================
-    # STEP 7: EVALUATE
+    # STEP 7: EVALUATE SINGLE MODEL ON VALIDATION SET
     # ========================
-    print("\nSTEP 7: EVALUATING MODEL")
-    results = predictor.check_accuracy(X_test_scaled, y_test)
+    print("\nSTEP 7: EVALUATING SINGLE MODEL ON VALIDATION SET")
+    val_results = predictor.check_accuracy(X_val_processed, y_val)
     
     # ========================
-    # STEP 8: TEST PREDICTIONS
+    # STEP 8: EVALUATE SINGLE MODEL ON TEST SET
     # ========================
-    print("\nSTEP 8: TESTING PREDICTIONS")
+    print("\nSTEP 8: EVALUATING SINGLE MODEL ON TEST SET")
+    test_results = predictor.check_accuracy(X_test_processed, y_test)
+    
+    # ========================
+    # STEP 9: TRAIN DIVERSE HYBRID ENSEMBLE (XGBoost + LightGBM + CatBoost)
+    # ========================
+    print("\n" + "="*70)
+    print("STEP 9: TRAINING DIVERSE HYBRID ENSEMBLE")
+    print("="*70)
+    print("Using diverse hyperparameters and feature sets for maximum ensemble benefit")
+    
+    ensemble = HybridEnsemble()
+    ensemble.feature_names = X.columns.tolist()
+    ensemble.train(X_train_processed, y_train, X_val_processed, y_val)
+    
+    # Plot ensemble training history
+    ensemble.plot_training_history()
+    
+    # ========================
+    # STEP 10: EVALUATE ENSEMBLE ON VALIDATION SET
+    # ========================
+    print("\nSTEP 10: EVALUATING ENSEMBLE ON VALIDATION SET")
+    ensemble_val_results = ensemble.check_accuracy(X_val_processed, y_val)
+    
+    # ========================
+    # STEP 11: EVALUATE ENSEMBLE ON TEST SET
+    # ========================
+    print("\nSTEP 11: EVALUATING ENSEMBLE ON TEST SET")
+    ensemble_test_results = ensemble.check_accuracy(X_test_processed, y_test)
+    
+    # ========================
+    # STEP 12: TEST PREDICTIONS
+    # ========================
+    print("\nSTEP 12: TESTING PREDICTIONS")
     test_single_prediction(predictor)
     
     # ========================
-    # STEP 9: SAVE MODEL
+    # STEP 13: SAVE MODELS
     # ========================
-    print("\nSTEP 9: SAVING MODEL")
-    predictor.save_model(OUTPUT_PATHS['model'])
+    print("\nSTEP 13: SAVING MODELS")
     
-    # ========================
-    # FINAL SUMMARY
-    # ========================
+    # Save single XGBoost model
+    predictor.save_model('./models/single_model_xgboost.pkl')
+    
+    # Save ensemble and individual models
+    ensemble.save_model()
+    
+    print(f"\n✓ Single XGBoost model saved: ./models/single_model_xgboost.pkl")
+    print(f"✓ Hybrid ensemble saved: ./models/hybrid_ensemble.pkl")
+    print(f"✓ Individual models also saved within ensemble")
+    
+    print(f"\n{'='*70}")
+    print(f"SINGLE MODEL (XGBoost) - Test Set:")
+    print(f"{'='*70}")
+    print(f"  Accuracy:  {test_results['accuracy']*100:.2f}%")
+    print(f"  F1-Score:  {test_results['f1_score']:.4f}")
+    print(f"  ROC-AUC:   {test_results['roc_auc']:.4f}")
+    print(f"  Recall:    {test_results['recall']:.4f}")
+    print(f"  Precision: {test_results['precision']:.4f}")
+    
+    print(f"\n{'='*70}")
+    print(f"HYBRID ENSEMBLE (XGBoost + LightGBM + CatBoost) - Test Set:")
+    print(f"{'='*70}")
+    print(f"  Accuracy:  {ensemble_test_results['accuracy']*100:.2f}%")
+    print(f"  F1-Score:  {ensemble_test_results['f1_score']:.4f}")
+    print(f"  ROC-AUC:   {ensemble_test_results['roc_auc']:.4f}")
+    print(f"  Recall:    {ensemble_test_results['recall']:.4f}")
+    print(f"  Precision: {ensemble_test_results['precision']:.4f}")
+    
+    # Calculate improvements
+    acc_improvement = (ensemble_test_results['accuracy'] - test_results['accuracy']) * 100
+    f1_improvement = ensemble_test_results['f1_score'] - test_results['f1_score']
+    
+    print(f"\n{'='*70}")
+    print(f"IMPROVEMENT WITH ENSEMBLE:")
+    print(f"{'='*70}")
+    print(f"  Accuracy Gain:  {acc_improvement:+.2f}%")
+    print(f"  F1-Score Gain:  {f1_improvement:+.4f}")
+    
+    if ensemble_test_results['accuracy'] > test_results['accuracy']:
+        print(f"\n  ✓ Ensemble performs BETTER!")
+        best_model = "HYBRID ENSEMBLE"
+    else:
+        print(f"\n  Single model performs better (ensemble might be overfitting)")
+        best_model = "SINGLE MODEL (XGBoost)"
+    
+    print(f"\n{'='*70}")
+    print(f"🏆 BEST MODEL: {best_model}")
+    print(f"{'='*70}")
+    
+    print(f"\n{'='*70}")
+    print(f"VALIDATION SET RESULTS (For Comparison):")
+    print(f"{'='*70}")
+    print(f"Single Model Val Accuracy: {val_results['accuracy']*100:.2f}%")
+    print(f"Ensemble Val Accuracy:     {ensemble_val_results['accuracy']*100:.2f}%")
+    
+    print(f"\n{'='*70}")
+    print(f"FILES CREATED:")
+    print(f"{'='*70}")
+    print(f"  ./models/single_model_xgboost.pkl          - Single XGBoost model")
+    print(f"  ./models/xgboost_model.pkl                 - XGBoost from ensemble")
+    print(f"  ./models/lightgbm_model.pkl                - LightGBM from ensemble")
+    print(f"  ./models/catboost_model.pkl                - CatBoost from ensemble")
+    print(f"  ./models/hybrid_ensemble.pkl               - Hybrid ensemble")
+    print(f"  ./models/correlation_matrix_full.png       - Full correlation heatmap")
+    print(f"  ./models/correlation_matrix_focused.png    - Top features correlation")
+    print(f"  ./models/training_history.png              - Single model training curves")
+    print(f"  ./models/ensemble_training_history.png     - All 3 models training curves")
+    
     print("\n" + "="*70)
-    print("PIPELINE COMPLETE - SUMMARY")
-    print("="*70)
-    print(f"\nModel Performance:")
-    print(f"  Accuracy:  {results['accuracy']*100:.2f}%")
-    print(f"  F1-Score:  {results['f1_score']:.4f}")
-    print(f"  ROC-AUC:   {results['roc_auc']:.4f}")
     
-    print(f"\nFiles Created:")
-    print(f"  {OUTPUT_PATHS['correlation_full']}")
-    print(f"  {OUTPUT_PATHS['correlation_focused']}")
-    print(f"  {OUTPUT_PATHS['model']}")
-    
-    print("\n" + "="*70)
-    
-    return predictor, results, correlation_matrix
+    return {
+        'single_model': predictor,
+        'ensemble': ensemble,
+        'results': {
+            'single': {'validation': val_results, 'test': test_results},
+            'ensemble': {'validation': ensemble_val_results, 'test': ensemble_test_results}
+        },
+        'correlation_matrix': correlation_matrix,
+        'best_model': best_model
+    }
 
 
 if __name__ == "__main__":
-    model, results, corr_matrix = main()
+    output = main()
